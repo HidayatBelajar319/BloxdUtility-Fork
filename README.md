@@ -1,61 +1,93 @@
-# 🏗️ Bloxd.io Utility
+# 💜 Players — Bloxd.io Utility
 
-![GitHub White Style](https://img.shields.io/badge/style-GitHub_White-ffffff?style=flat-square)
 ![Status: Active](https://img.shields.io/badge/status-Active-green.svg)
+![Next.js](https://img.shields.io/badge/Next.js-14_App_Router-black?style=flat-square)
+![No API Key](https://img.shields.io/badge/AI-No_API_Key_Required-blueviolet?style=flat-square)
 
-**A professional helper tool for Bloxd.io developers.**  
-**Turn any AI into a Bloxd.io expert with the Automated Mega-Prompt Generator!**
+**The ultimate developer hub for Bloxd.io — built by [FallenNightA](https://github.com/FallenNightA).**
+**Turn any AI into a Bloxd.io expert with the Automated Mega-Prompt Generator — now with free, zero-config AI built in!**
+
+> 🏢 **Official account:** [HidayatBelajar319](https://github.com/HidayatBelajar319) is one of the official accounts made by **FallenNightA** (owner).
 
 ---
+
 ## 🌐 Live Demo
-🔗 **[Visit the Website Here](https://fallennighta.github.io/Bloxd.io-Utility-A-Website-For-Helper-Developer-/)**
+🔗 **[https://bloxdutility.netlify.app/](https://bloxdutility.netlify.app/)**
+📚 **Documentation site:** [BloxdUtility-Documentation repo](https://github.com/HidayatBelajar319/BloxdUtility-Documentation)
 
 ---
+
 ## ✨ Features
-✅ **CodexMind AI Dev Companion (NEW)** – Live streaming AI developer helper integrated directly inside Code Lab and Command Studio. Generate custom commands, logic callbacks, and gameplay loops in real-time with automatic workspace mapping and instant injection buttons!
+✅ **Home Dashboard (`/home`)** – Live community stats, rotating Bloxd.io dev tips, API function spotlight, item/block lookup, changelog feed.
+
+✅ **Free AI, zero config 🤖** – Bloxd AI + Code Lab CodexMind run on **Puter.js** with no API key. Optional bring-your-own free key (OpenRouter/Groq) in Settings, Pollinations only behind your own key with error-sniffing guards.
+
+✅ **CodexMind AI Dev Companion** – Streaming AI helper inside Code Lab. Generate commands, callbacks, and game loops with automatic workspace mapping.
 
 ✅ **Automated AI Mega-Prompt Generator** – Combines custom instructions with real-time GitHub API data (`Bloxdy/code-api`) to guide any general-purpose LLM step-by-step.
 
-✅ **Full API Documentation Viewer** – Browse, search, and bookmark official Bloxd.io functions with syntax highlighting (Prism.js).
+✅ **Internal Documentation (`/documentation`)** – Code API docs via **automatic GitHub discovery** (no hardcoded file list) + a **Bloxd.io Game Features** tab: every feature, every item and what it's for, including **secret code-only items**.
 
-✅ **GitHub White Style UI** – Clean, high-contrast design using Tailwind CSS with seamless dark/light sync.
+✅ **BloxdBench (`/bloxd-bench`)** – Voxel model studio that loads models/textures/skyboxes **over the internet** from [`Bloxdy/texture-packs`](https://github.com/Bloxdy/texture-packs). No local asset folders.
 
-✅ **Copy-Paste Ready Code** – All scripts are rigorously checked, validated, and formatted specifically for the **Bloxd.io F8 console** and custom Code Blocks.
+✅ **Developer Tools (`/tools`)** – M2B Schematic Converter, Plugin Auto-Merger, Visual QTE Generator, and more.
 
-✅ **Parallel Data Fetching** – Pulls 14+ documentation files from GitHub in seconds.
+✅ **Bloxd Modrinth (`/modrinth`)** – Community hub for mods, texture packs, and server plugins.
+
+✅ **Changelog (`/changelog`)** – Markdown-powered release notes synced with `CHANGELOG.md`, linked from every sidebar.
 
 ---
+
+## 🗺️ Clean URLs (no `.html`)
+| Route | Page |
+|---|---|
+| `/` → `/home` | Home dashboard |
+| `/documentation` | Internal docs + game features |
+| `/lab` | Code Lab |
+| `/modrinth` | Bloxd Modrinth |
+| `/tools` | Developer Tools |
+| `/bloxd-bench` | BloxdBench studio |
+| `/bloxd-ai` | Bloxd AI |
+| `/changelog` | Release notes |
+
+---
+
 ## 🛠️ Technologies
-- **Frontend**: HTML5, Tailwind CSS, JavaScript (ES6+), CSS variables.
-- **Libraries**: [Marked.js](https://marked.js.org/), [Prism.js](https://prismjs.com/), Monaco Editor.
-- **API**: GitHub REST API, Next.js server-side streaming endpoints (`/api/chat`).
+- **Framework**: [Next.js 14](https://nextjs.org/) App Router + TypeScript + Tailwind CSS
+- **Editor**: Monaco Editor · **3D**: Three.js · **Docs**: Marked.js + Prism.js
+- **Data**: GitHub REST API auto-discovery (`Bloxdy/code-api`, `Bloxdy/texture-packs`)
+- **AI**: [Puter.js](https://docs.puter.com/AI/) (default, no key) · OpenRouter/Groq BYOK · `/api/chat` server path
 
 ---
+
 ## 🚀 Local Run & Setup
-1. Clone or download the repository.
-2. Install all development packages:
+1. Clone the repository.
+2. Install packages:
    ```bash
    npm install
    ```
-3. Create your local configuration `.env.local` at the root directory:
-   ```env
-   GEMINI_API_KEY=your_google_ai_studio_api_key_here
-   ```
-4. Run the local development workspace:
+3. Run the dev server (no API key needed — AI works out of the box):
    ```bash
    npm run dev
    ```
+4. Optional — power users only, create `.env.local`:
+   ```env
+   GEMINI_API_KEY=your_key_here
+   OPENROUTER_API_KEY=your_key_here
+   ```
 
 ---
+
 ## 🤝 How to Contribute
 1. Fork the repository.
-2. Create a new branch (`git checkout -b feature/your-idea`).
-3. Commit your changes (`git commit -m "Add awesome feature"`).
-4. Push to the branch (`git push origin feature/your-idea`).
-5. Open a Pull Request!
+2. Create a branch (`git checkout -b feature/your-idea`).
+3. Commit, push, open a Pull Request!
 
 ---
+
 ## 🙏 Credits
+- **Company**: Players · **Owner/Author**: [FallenNightA](https://github.com/FallenNightA)
+- **Official account**: [HidayatBelajar319](https://github.com/HidayatBelajar319) (made by FallenNightA)
 - **Bloxd.io**: [Official Website](https://bloxd.io)
-- **API Data**: [Bloxdy/code-api](https://github.com/Bloxdy/code-api)
-- **Author**: [FallenNightA](https://github.com/FallenNightA)
+- **API Data**: [Bloxdy/code-api](https://github.com/Bloxdy/code-api) · **Models**: [Bloxdy/texture-packs](https://github.com/Bloxdy/texture-packs)
+- Inspired by [Delfineonx](https://github.com/delfineonx) · See [LICENSE.md](../LICENSE.md)

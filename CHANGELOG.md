@@ -2,6 +2,10 @@
 
 All notable changes to Players are recorded here. The newest release is listed first.
 
+## v2.4 — Free No-Key AI + Fork Push
+
+Wired zero-config AI into Bloxd AI and Code Lab CodexMind: **Puter.js** default (no key, streaming, popup-blocked guard), optional bring-your-own free key (OpenRouter/Groq in Settings/localStorage), Pollinations only behind your own key with error-sniffing guards. New shared module `lib/free-ai.ts`, provider picker in chat + Settings. Pushed the full Players rebuild to `BloxdUtility-Fork`.
+
 ## v2.3 — Players Rebrand
 
 Rebranded the website as **Players**, replaced the raster logo with a scalable SVG logo, and removed the personal-features text from the public site.
