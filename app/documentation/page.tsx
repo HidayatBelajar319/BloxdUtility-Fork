@@ -215,6 +215,7 @@ const NAV_LINKS = [
   {href: '/tools', label: 'Developer Tools'},
   {href: '/bloxd-bench', label: 'BloxdBench'},
   {href: '/bloxd-ai', label: 'Bloxd AI'},
+  {href: '/workspace', label: 'Workspace'},
   {href: '/changelog', label: 'Changelog'},
 ];
 

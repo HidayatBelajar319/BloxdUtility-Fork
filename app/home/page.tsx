@@ -229,6 +229,7 @@ export default function HomePage() {
           <Link href="/tools" className="nav-item"><i className="fas fa-tools mr-3 opacity-40"></i> Developer Tools</Link>
           <Link href="/bloxd-bench" className="nav-item"><i className="fas fa-cubes mr-3 opacity-40"></i> BloxdBench</Link>
           <Link href="/bloxd-ai" className="nav-item"><i className="fas fa-robot mr-3 opacity-40"></i> Bloxd AI</Link>
+          <Link href="/workspace" className="nav-item"><i className="fas fa-columns mr-3 opacity-40"></i> Workspace</Link>
           <Link href="/changelog" className="nav-item"><i className="fas fa-list-alt mr-3 opacity-40"></i> Changelog</Link>
 
           <div className="mt-8 px-4 text-[12px] font-bold text-gray-400 uppercase tracking-widest">External</div>

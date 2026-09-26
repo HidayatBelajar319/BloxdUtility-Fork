@@ -36,6 +36,7 @@ export default function ModrinthPage() {
               <Link href="/tools" className="text-sm font-medium text-[var(--text)] hover:text-[var(--primary)] transition-colors">Developer Tools</Link>
               <Link href="/bloxd-bench" className="text-sm font-medium text-[var(--text)] hover:text-[var(--primary)] transition-colors">BloxdBench</Link>
               <Link href="/bloxd-ai" className="text-sm font-medium text-[var(--text)] hover:text-[var(--primary)] transition-colors">Bloxd AI</Link>
+              <Link href="/workspace" className="text-sm font-medium text-[var(--text)] hover:text-[var(--primary)] transition-colors">Workspace</Link>
               <Link href="/changelog" className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--text)] hover:text-[var(--primary)] transition-colors"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3h8v4M6 5h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2zm2 5h8m-8 4h8m-8 4h5" /></svg> Changelog</Link>
             </nav>
             <div className="flex items-center gap-4">
