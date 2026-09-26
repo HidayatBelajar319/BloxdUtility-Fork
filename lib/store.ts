@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { DEFAULT_PUTER_MODEL, type ProviderId } from './free-ai';
 
 export interface Message {
   id: string;
@@ -31,6 +32,13 @@ interface AppState {
   setGeminiApiKey: (key: string) => void;
   selectedModel: string;
   setSelectedModel: (model: string) => void;
+  // Free AI provider chain: Puter.js (zero-config) -> BYOK -> Pollinations (key only).
+  // Keys themselves are never stored here; they live in their own localStorage entry
+  // and are read at call time by lib/free-ai.ts.
+  freeAiProvider: ProviderId;
+  setFreeAiProvider: (provider: ProviderId) => void;
+  freeAiPuterModel: string;
+  setFreeAiPuterModel: (model: string) => void;
   agentMode: boolean;
   setAgentMode: (active: boolean) => void;
   conversations: Conversation[];
@@ -88,6 +96,10 @@ export const useAppStore = create<AppState>()(
       setGeminiApiKey: (geminiApiKey) => set({ geminiApiKey }),
       selectedModel: 'gemini-3.5-flash',
       setSelectedModel: (selectedModel) => set({ selectedModel }),
+      freeAiProvider: 'auto',
+      setFreeAiProvider: (freeAiProvider) => set({ freeAiProvider }),
+      freeAiPuterModel: DEFAULT_PUTER_MODEL,
+      setFreeAiPuterModel: (freeAiPuterModel) => set({ freeAiPuterModel }),
       agentMode: false,
       setAgentMode: (agentMode) => set({ agentMode }),
       conversations: [],

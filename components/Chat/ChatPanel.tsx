@@ -4,6 +4,19 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Send, Paperclip } from 'lucide-react';
 import { useAppStore, Message } from '@/lib/store';
 import { MessageItem } from './MessageItem';
+import { AgentMindPrompt, CodexMindPrompt, MindChatPrompt } from '@/lib/prompts';
+import {
+  BloxdSystemPrompt,
+  FreeAiFileOpsInstruction,
+  PROVIDER_LABELS,
+  PUTER_MODELS,
+  extractFencedCode,
+  isProviderError,
+  requestFreeAi,
+  validateModelOutput,
+  type FreeAiMessage,
+  type ProviderId,
+} from '@/lib/free-ai';
 import toast from 'react-hot-toast';
 
 export function ChatPanel() {
@@ -17,7 +30,8 @@ export function ChatPanel() {
   const { 
     currentConversationId, conversations, addConversation, updateConversation,
     openAIApiKey, geminiApiKey, selectedModel, setEditorCode, setEditorLanguage,
-    editorCode, editorLanguage, projectInstructions, setProjectInstructions
+    editorCode, editorLanguage, projectInstructions, setProjectInstructions,
+    freeAiProvider, setFreeAiProvider, freeAiPuterModel, setFreeAiPuterModel
   } = useAppStore();
 
   const activeConversation = useMemo(() => conversations.find(c => c.id === currentConversationId), [conversations, currentConversationId]);
@@ -77,16 +91,22 @@ export function ChatPanel() {
   const handleSubmit = useCallback(async () => {
     if (!input.trim() || isGenerating) return;
 
-    if (selectedModel.startsWith('gpt') && !openAIApiKey) {
-       toast.error('Please configure your OpenAI API Key in Settings first.');
-       return;
-    }
-    const isCustomModel = ['CodexMind', 'MindChat', 'AgentMind'].includes(selectedModel);
-    const isGemini = selectedModel.startsWith('gemini') || isCustomModel;
-    if (isGemini && !geminiApiKey && !isCustomModel) {
-       // Assuming it might fall back to server env var if missing, but UI requirement says to ask for it
-       toast.error('Please configure your Gemini API Key in Settings first.');
-       return;
+    // Free provider chain is the default zero-config path; the server /api/chat
+    // route is only used when the user explicitly picks "CodeMind server keys".
+    const useFreeAi = freeAiProvider !== 'server';
+
+    if (!useFreeAi) {
+      if (selectedModel.startsWith('gpt') && !openAIApiKey) {
+         toast.error('Please configure your OpenAI API Key in Settings first.');
+         return;
+      }
+      const isCustomModel = ['CodexMind', 'MindChat', 'AgentMind'].includes(selectedModel);
+      const isGemini = selectedModel.startsWith('gemini') || isCustomModel;
+      if (isGemini && !geminiApiKey && !isCustomModel) {
+         // Assuming it might fall back to server env var if missing, but UI requirement says to ask for it
+         toast.error('Please configure your Gemini API Key in Settings first.');
+         return;
+      }
     }
 
     const newMessage: Message = {
@@ -150,176 +170,236 @@ npm install something
 Current workspace files: ${currentFiles.map(f => f.name).join(', ')}
 ${projInst ? `\n\n[PROJECT INSTRUCTIONS (User defined)]\n${projInst}` : ''}`;
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: abortControllerRef.current.signal,
-        body: JSON.stringify({
-          messages: currentMessages.slice(0, -1), // Everything except the empty assistant message
-          model: selectedModel,
-          openAIApiKey,
-          geminiApiKey,
-          systemPrompt: injectedSystemPrompt
-        }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Failed to generate response');
-      }
-
-      if (!response.body) throw new Error("No response body");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
+      const history = currentMessages.slice(0, -1); // Everything except the empty assistant message
+      const baseMessages = [...currentMessages];
       let fullContent = '';
-      let buffer = '';
 
-      while (!done) {
-         const { value, done: doneReading } = await reader.read();
-         done = doneReading;
-         if (value) {
+      const withAssistant = (content: string): Message[] =>
+        baseMessages.map(m => (m.id === assistantMsgId ? { ...m, content } : m));
+
+      const appendDelta = (delta: string) => {
+        if (!delta) return;
+        fullContent += delta;
+        updateConversation(convId, { messages: withAssistant(fullContent) });
+      };
+
+      /**
+       * Shared post-generation step: plays the completion cue, applies any XML workspace
+       * commands, and otherwise auto-fills the editor from a fenced code block. The raw
+       * response is validated first, so an error payload is never applied as code.
+       */
+      const applyAssistantTurn = (rawContent: string, providerName: string) => {
+        const validated = validateModelOutput(rawContent, providerName);
+        if (!validated.ok) {
+          toast.error(validated.error || 'The AI provider returned an unusable response.');
+          return;
+        }
+        const content = validated.text;
+
+        playSuccessSound();
+        toast.success('AI Build Completed! Live Sandbox ready 🚀', { icon: '🔔', duration: 4000 });
+
+        // Auto-extract code blocks and send the largest/last one to the editor.
+        // Add logic to parse special XML commands.
+        const cmdRegex = /<command\s+type="([^"]+)"(?:\s+name="([^"]+)")?(?:\s+new_name="([^"]+)")?(?:\s+[^>]*?)?(?:>([\s\S]*?)<\/command>|\s*\/>)/g;
+        const commands = [...content.matchAll(cmdRegex)];
+
+        for (const match of commands) {
+          const type = match[1];
+          const name = match[2];
+          const newName = match[3];
+          const innerContent = (match[4] || '').trim();
+
+          if (type === 'create_file' || type === 'update_file') {
+            if (name) {
+              let lang = 'typescript';
+              if (name.endsWith('.py')) lang = 'python';
+              else if (name.endsWith('.js')) lang = 'javascript';
+              else if (name.endsWith('.html')) lang = 'html';
+              else if (name.endsWith('.css')) lang = 'css';
+              else if (name.endsWith('.json')) lang = 'json';
+              else if (name.endsWith('.md')) lang = 'markdown';
+
+              const files = useAppStore.getState().files;
+              const existing = files.find(f => f.name === name);
+              if (existing) {
+                useAppStore.getState().updateFile(existing.id, innerContent);
+                useAppStore.getState().setActiveFileId(existing.id);
+              } else {
+                const id = crypto.randomUUID();
+                useAppStore.getState().addFile({ id, name, content: innerContent, language: lang });
+              }
+              toast.success(`Created/Updated file: ${name}`, { icon: '📁' });
+            }
+          } else if (type === 'delete_file' || type === 'delete') {
+            if (name) {
+              const files = useAppStore.getState().files;
+              const existing = files.find(f => f.name === name);
+              if (existing) {
+                useAppStore.getState().deleteFile(existing.id);
+                toast.success(`Deleted file: ${name}`, { icon: '🗑️' });
+              } else {
+                const cleanName = name.replace(/^\//, '');
+                const fuzzy = files.find(f => f.name.toLowerCase().endsWith(cleanName.toLowerCase()) || cleanName.toLowerCase().endsWith(f.name.toLowerCase()));
+                if (fuzzy) {
+                  useAppStore.getState().deleteFile(fuzzy.id);
+                  toast.success(`Deleted file: ${fuzzy.name}`, { icon: '🗑️' });
+                } else {
+                  toast.error(`File path not found to delete: ${name}`);
+                }
+              }
+            }
+          } else if (type === 'rename_file') {
+            if (name && newName) {
+              const files = useAppStore.getState().files;
+              const existing = files.find(f => f.name === name);
+              if (existing) {
+                let lang = existing.language;
+                if (newName.endsWith('.py')) lang = 'python';
+                else if (newName.endsWith('.js')) lang = 'javascript';
+                else if (newName.endsWith('.html')) lang = 'html';
+                else if (newName.endsWith('.css')) lang = 'css';
+                else if (newName.endsWith('.json')) lang = 'json';
+                else if (newName.endsWith('.md')) lang = 'markdown';
+
+                useAppStore.getState().renameFile(existing.id, newName, lang);
+                toast.success(`Renamed file to: ${newName}`, { icon: '📝' });
+              }
+            }
+          } else if (type === 'run_terminal') {
+            useAppStore.getState().setTerminalOpen(true);
+            useAppStore.getState().setTerminalLogs(prev => [...prev, `> ${innerContent}`, '> Executing...', `> Done.`]);
+          }
+        }
+
+        if (commands.length === 0) {
+          // Fallback to old behavior: auto-fill the editor from a fenced code block.
+          const block = extractFencedCode(content);
+          if (block && block.code.length > 10) {
+            const files = useAppStore.getState().files;
+            if (files.length > 0) {
+              const active = useAppStore.getState().activeFileId;
+              const fileToUpdate = files.find(f => f.id === active) || files[0];
+              useAppStore.getState().updateFile(fileToUpdate.id, block.code);
+
+              const validLangs = ['typescript', 'javascript', 'python', 'html', 'css', 'json', 'markdown'];
+              const normalizedLang = validLangs.includes(block.lang) ? block.lang : 'typescript';
+              useAppStore.getState().renameFile(fileToUpdate.id, fileToUpdate.name, normalizedLang);
+              toast.success(`Generated code auto-filled into Editor!`, { icon: '✨' });
+            }
+          }
+        }
+      };
+
+      if (useFreeAi) {
+        // ---- Zero-config chain: Puter.js -> your own key -> Pollinations (key only) ----
+        // The selected persona (CodexMind / MindChat / AgentMind) is preserved; the
+        // Bloxd scripting persona is always prepended so code comes back fenced.
+        const persona =
+          selectedModel === 'CodexMind' ? CodexMindPrompt
+          : selectedModel === 'AgentMind' ? AgentMindPrompt
+          : selectedModel === 'MindChat' ? MindChatPrompt
+          : '';
+
+        const freeMessages: FreeAiMessage[] = [
+          {
+            role: 'system',
+            content: `${BloxdSystemPrompt}${persona ? `\n\n${persona}` : ''}\n\n${injectedSystemPrompt}${FreeAiFileOpsInstruction}`,
+          },
+          ...history.map(m => ({ role: m.role as FreeAiMessage['role'], content: m.content })),
+        ];
+
+        const result = await requestFreeAi({
+          messages: freeMessages,
+          provider: freeAiProvider,
+          task: 'code',
+          stream: true, // the chat UI already renders deltas live
+          puterModel: freeAiPuterModel,
+          onProvider: info => {
+            toast(`Connecting to ${info.provider} · ${info.model}…`, { icon: '🔌', duration: 1600 });
+          },
+          onProviderError: info => {
+            console.warn(`[free-ai] ${info.label} failed:`, info.message);
+          },
+          signal: abortControllerRef.current.signal,
+        });
+
+        // Deltas already streamed in; re-sync if the provider answered non-streaming.
+        if (fullContent !== result.text) {
+          fullContent = result.text;
+          updateConversation(convId, { messages: withAssistant(fullContent) });
+        }
+
+        applyAssistantTurn(result.text, result.provider);
+      } else {
+        // ---- Existing server-side /api/chat path (behaviour unchanged) ----
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: abortControllerRef.current.signal,
+          body: JSON.stringify({
+            messages: history,
+            model: selectedModel,
+            openAIApiKey,
+            geminiApiKey,
+            systemPrompt: injectedSystemPrompt
+          }),
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || 'Failed to generate response');
+        }
+
+        if (!response.body) throw new Error('No response body');
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let done = false;
+        let buffer = '';
+
+        while (!done) {
+          const { value, done: doneReading } = await reader.read();
+          done = doneReading;
+          if (value) {
             buffer += decoder.decode(value, { stream: !done });
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
-            
+
             for (const line of lines) {
-                const trimmedLine = line.trim();
-                if (trimmedLine.startsWith('data: ')) {
-                    const data = trimmedLine.slice(6);
-                    if (data === '[DONE]') {
-                       // Fully done
-                       playSuccessSound();
-                       toast.success('AI Build Completed! Live Sandbox ready 🚀', { icon: '🔔', duration: 4000 });
-                       // Auto-extract code blocks and send the largest/last one to the editor
-                       // Add logic to parse special XML commands
-                       const cmdRegex = /<command\s+type="([^"]+)"(?:\s+name="([^"]+)")?(?:\s+new_name="([^"]+)")?(?:\s+[^>]*?)?(?:>([\s\S]*?)<\/command>|\s*\/>)/g;
-                       const commands = [...fullContent.matchAll(cmdRegex)];
-                       
-                       for (const match of commands) {
-                          const type = match[1];
-                          const name = match[2];
-                          const newName = match[3];
-                          const innerContent = (match[4] || '').trim();
-
-                          if (type === 'create_file' || type === 'update_file') {
-                             if (name) {
-                                let lang = 'typescript';
-                                if (name.endsWith('.py')) lang = 'python';
-                                else if (name.endsWith('.js')) lang = 'javascript';
-                                else if (name.endsWith('.html')) lang = 'html';
-                                else if (name.endsWith('.css')) lang = 'css';
-                                else if (name.endsWith('.json')) lang = 'json';
-                                else if (name.endsWith('.md')) lang = 'markdown';
-                                
-                                const files = useAppStore.getState().files;
-                                const existing = files.find(f => f.name === name);
-                                if (existing) {
-                                   useAppStore.getState().updateFile(existing.id, innerContent);
-                                   useAppStore.getState().setActiveFileId(existing.id);
-                                } else {
-                                   const id = crypto.randomUUID();
-                                   useAppStore.getState().addFile({ id, name, content: innerContent, language: lang });
-                                }
-                                toast.success(`Created/Updated file: ${name}`, { icon: '📁' });
-                             }
-                          } else if (type === 'delete_file' || type === 'delete') {
-                             if (name) {
-                                const files = useAppStore.getState().files;
-                                const existing = files.find(f => f.name === name);
-                                if (existing) {
-                                   useAppStore.getState().deleteFile(existing.id);
-                                   toast.success(`Deleted file: ${name}`, { icon: '🗑️' });
-                                } else {
-                                   const cleanName = name.replace(/^\//, '');
-                                   const fuzzy = files.find(f => f.name.toLowerCase().endsWith(cleanName.toLowerCase()) || cleanName.toLowerCase().endsWith(f.name.toLowerCase()));
-                                   if (fuzzy) {
-                                      useAppStore.getState().deleteFile(fuzzy.id);
-                                      toast.success(`Deleted file: ${fuzzy.name}`, { icon: '🗑️' });
-                                   } else {
-                                      toast.error(`File path not found to delete: ${name}`);
-                                   }
-                                }
-                             }
-                          } else if (type === 'rename_file') {
-                             if (name && newName) {
-                                const files = useAppStore.getState().files;
-                                const existing = files.find(f => f.name === name);
-                                if (existing) {
-                                   let lang = existing.language;
-                                   if (newName.endsWith('.py')) lang = 'python';
-                                   else if (newName.endsWith('.js')) lang = 'javascript';
-                                   else if (newName.endsWith('.html')) lang = 'html';
-                                   else if (newName.endsWith('.css')) lang = 'css';
-                                   else if (newName.endsWith('.json')) lang = 'json';
-                                   else if (newName.endsWith('.md')) lang = 'markdown';
-                                   
-                                   useAppStore.getState().renameFile(existing.id, newName, lang);
-                                   toast.success(`Renamed file to: ${newName}`, { icon: '📝' });
-                                }
-                             }
-                          } else if (type === 'run_terminal') {
-                             useAppStore.getState().setTerminalOpen(true);
-                             useAppStore.getState().setTerminalLogs(prev => [...prev, `> ${innerContent}`, '> Executing...', `> Done.`]);
-                          }
-                       }
-
-                       if (commands.length === 0) {
-                          // Fallback to old behavior
-                          const codeBlocks = [...fullContent.matchAll(/```(\w*)[ \t]*\r?\n([\s\S]*?)```/g)];
-                          if (codeBlocks.length > 0) {
-                             const lastBlock = codeBlocks[codeBlocks.length - 1];
-                             const lang = lastBlock[1] || 'typescript';
-                             const code = lastBlock[2].trim();
-                             
-                             if (code.length > 10) {
-                                const files = useAppStore.getState().files;
-                                if (files.length > 0) {
-                                   const active = useAppStore.getState().activeFileId;
-                                   const fileToUpdate = files.find(f => f.id === active) || files[0];
-                                   useAppStore.getState().updateFile(fileToUpdate.id, code);
-                                   
-                                   const validLangs = ['typescript', 'javascript', 'python', 'html', 'css', 'json', 'markdown'];
-                                   const normalizedLang = validLangs.includes(lang.toLowerCase()) ? lang.toLowerCase() : 'typescript';
-                                   useAppStore.getState().renameFile(fileToUpdate.id, fileToUpdate.name, normalizedLang);
-                                   toast.success(`Generated code auto-filled into Editor!`, { icon: '✨' });
-                                }
-                             }
-                          }
-                       }
-                    } else if (data) {
-                       try {
-                          const parsed = JSON.parse(data);
-                          if (parsed.delta) {
-                             fullContent += parsed.delta;
-                             // Update the message in the store
-                             const updatedMsgs = currentMessages.map(m => 
-                                m.id === assistantMsgId ? { ...m, content: fullContent } : m
-                             );
-                             updateConversation(convId, { messages: updatedMsgs });
-                             currentMessages = updatedMsgs; // For next iteration
-                          }
-                       } catch (e) {
-                          console.error("Error parsing delta:", data);
-                       }
-                    }
+              const trimmedLine = line.trim();
+              if (trimmedLine.startsWith('data: ')) {
+                const data = trimmedLine.slice(6);
+                if (data === '[DONE]') {
+                  applyAssistantTurn(fullContent, 'CodeMind');
+                } else if (data) {
+                  try {
+                    const parsed = JSON.parse(data);
+                    if (parsed.delta) appendDelta(parsed.delta);
+                  } catch (e) {
+                    console.error('Error parsing delta:', data);
+                  }
                 }
+              }
             }
-         }
+          }
+        }
       }
 
     } catch (error: any) {
-      if (error.name === 'AbortError') {
-         toast('Response stopped.');
+      if (error?.name === 'AbortError' || error?.kind === 'aborted') {
+        toast('Response stopped.');
       } else {
-         toast.error(error.message || 'An error occurred while communicating with the AI.');
+        const message = isProviderError(error)
+          ? [error.userMessage, error.hint].filter(Boolean).join(' ')
+          : error?.message || 'An error occurred while communicating with the AI.';
+        toast.error(message, { duration: 6000 });
       }
     } finally {
       setIsGenerating(false);
       abortControllerRef.current = null;
     }
-  }, [input, isGenerating, selectedModel, openAIApiKey, geminiApiKey, messages, currentConversationId, activeConversation, addConversation, updateConversation, systemPrompt, playSuccessSound]);
+  }, [input, isGenerating, selectedModel, openAIApiKey, geminiApiKey, messages, currentConversationId, activeConversation, addConversation, updateConversation, systemPrompt, playSuccessSound, freeAiProvider, freeAiPuterModel]);
 
   const stopGenerating = () => {
      if (abortControllerRef.current) {
@@ -480,9 +560,31 @@ ${projInst ? `\n\n[PROJECT INSTRUCTIONS (User defined)]\n${projInst}` : ''}`;
               <Send className="w-5 h-5" />
            </button>
         </div>
-        <div className="text-center mt-2 text-xs text-[var(--text-muted)]">
-           Model: {selectedModel} · Press Enter to send · Shift+Enter for newline
+        <div className="text-center mt-2 text-xs text-[var(--text-muted)] flex items-center justify-center gap-2 flex-wrap">
+           <span>Model: {selectedModel} · Press Enter to send · Shift+Enter for newline</span>
+           <select
+              value={freeAiProvider}
+              onChange={(e) => setFreeAiProvider(e.target.value as ProviderId)}
+              className="bg-[var(--surface)] border border-[var(--border)] rounded-md px-2 py-0.5 text-xs text-[var(--text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] cursor-pointer"
+              title="AI provider — Auto uses Puter.js free first, then your own key, then Pollinations"
+           >
+              {(Object.keys(PROVIDER_LABELS) as ProviderId[]).map(id => (
+                 <option key={id} value={id}>{PROVIDER_LABELS[id]}</option>
+              ))}
+           </select>
         </div>
+        {freeAiProvider === 'puter' && (
+          <select
+            value={freeAiPuterModel}
+            onChange={(e) => setFreeAiPuterModel(e.target.value)}
+            className="mt-1 bg-[var(--surface)] border border-[var(--border)] rounded-md px-2 py-0.5 text-xs text-[var(--text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] cursor-pointer"
+            title="Puter.js model"
+          >
+            {PUTER_MODELS.map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+        )}
       </div>
     </div>
   );

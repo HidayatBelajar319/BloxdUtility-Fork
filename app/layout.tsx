@@ -2,8 +2,9 @@ import type {Metadata} from 'next';
 import './globals.css'; // Global styles
 
 export const metadata: Metadata = {
-  title: 'My Google AI Studio App',
-  description: 'My Google AI Studio App',
+  title: 'Players — Bloxd.io Developer Hub',
+  description: 'Players: documentation, Code Lab, Developer Tools, BloxdBench and AI assistant for Bloxd.io.',
+  icons: {icon: '/favicon.png'},
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
