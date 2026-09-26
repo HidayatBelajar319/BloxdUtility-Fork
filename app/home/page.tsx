@@ -1,11 +1,17 @@
-'use client';
+﻿'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
-import Script from 'next/script';
 
 const FALLBACK_FILES = ['README.md','API_REFERENCE.md','CLIENT_OPTIONS.md','CALLBACKS.md','ICONS.md','MESH_ENTITY_DOCS.md','SKINS_AND_POSES.md','MOB_SETTINGS.md','ENTITY_SETTINGS.md','PARTICLES.md','SOUNDS_AND_MUSIC.md','QTE_DOCS.md','BLOCK_NAMES.txt','ITEM_NAMES.txt'];
 const GITHUB_BASE = "https://raw.githubusercontent.com/Bloxdy/code-api/main/";
+
+type ApiFunctionInfo = { description?: string; example?: string };
+type SearchEntry = { name: string; kind: 'block' | 'item' };
+type SearchState = { matches: SearchEntry[] | null; count: string };
+type SpotlightState = { name: string; desc: string; example: string };
+type TipState = { text: string; code: string | null; counter: string };
+type SearchType = 'all' | 'blocks' | 'items';
 
 // Auto-discover all documentation files from the Bloxdy/code-api GitHub repo.
 // Falls back to the hardcoded list if the GitHub API is unavailable (rate limit, offline, etc).
@@ -29,8 +35,18 @@ async function fetchDiscovery(): Promise<string[]> {
 export default function HomePage() {
   const [isDark, setIsDark] = useState(false);
   const [stats, setStats] = useState({ funcs: 0, blocks: 0, items: 0, callbacks: 0 });
-  const [currentTip, setCurrentTip] = useState(0);
+  const [tip, setTip] = useState<TipState>({ text: 'Loading tip...', code: null, counter: '1 / 10' });
   const [megaPrompt, setMegaPrompt] = useState('');
+  const [search, setSearch] = useState<SearchState>({ matches: null, count: '' });
+  const [searchType, setSearchType] = useState<SearchType>('all');
+  const [spotlight, setSpotlight] = useState<SpotlightState>({ name: 'api.giveItem()', desc: 'Loading...', example: 'loading...' });
+
+  // Shared API dataset (functions / blocks / items) for search + spotlight.
+  const apiDataRef = useRef<{ functions: Record<string, ApiFunctionInfo>; blocks: string[]; items: string[] }>({ functions: {}, blocks: [], items: [] });
+  const currentTipRef = useRef(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const syncStatusRef = useRef<HTMLDivElement>(null);
+  const toastRef = useRef<HTMLDivElement>(null);
 
   const TIPS = [
     {
@@ -42,7 +58,7 @@ export default function HomePage() {
       code: null
     },
     {
-      text: "The tick callback fires 20 times per second. Keep tick logic lightweight — heavy code here causes lag for all players.",
+      text: "The tick callback fires 20 times per second. Keep tick logic lightweight â€” heavy code here causes lag for all players.",
       code: "tick = (ms) => {\n  /* fast checks only */\n};"
     },
     {
@@ -50,7 +66,7 @@ export default function HomePage() {
       code: null
     },
     {
-      text: "Never use // comments — Bloxd.io's code engine doesn't support them! Use /* block comments */ instead.",
+      text: "Never use // comments â€” Bloxd.io's code engine doesn't support them! Use /* block comments */ instead.",
       code: "/* This comment works! */\n// This will BREAK your code!"
     },
     {
@@ -70,7 +86,7 @@ export default function HomePage() {
       code: null
     },
     {
-      text: "Use api.setBlockRect() to fill a whole area with blocks at once — much faster than looping over individual api.setBlock() calls.",
+      text: "Use api.setBlockRect() to fill a whole area with blocks at once â€” much faster than looping over individual api.setBlock() calls.",
       code: "api.setBlockRect([0,0,0], [10,5,10], 'Stone Bricks');"
     },
     {
@@ -94,6 +110,13 @@ export default function HomePage() {
     setIsDark(newDark);
     localStorage.setItem('darkMode', String(newDark));
     document.documentElement.classList.toggle('dark', newDark);
+  };
+
+  const toggleSidebar = () => {
+    const sb = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.sidebar-overlay');
+    if (sb) sb.classList.toggle('mobile-open');
+    if (overlay) overlay.classList.toggle('active');
   };
 
   const animateCount = (target: number, duration = 1200) => {
@@ -146,34 +169,22 @@ export default function HomePage() {
   };
 
   const showTip = (index: number) => {
-    const tip = TIPS[index];
-    const textEl = document.getElementById('tip-text');
-    const codeEl = document.getElementById('tip-code');
-    const counterEl = document.getElementById('tip-counter');
-    if (textEl) textEl.textContent = tip.text;
-    if (codeEl) {
-      if (tip.code) {
-        codeEl.textContent = tip.code;
-        codeEl.style.display = 'block';
-      } else {
-        codeEl.style.display = 'none';
-      }
-    }
-    if (counterEl) counterEl.textContent = `${index + 1} / ${TIPS.length}`;
-    setCurrentTip(index);
+    const entry = TIPS[index];
+    currentTipRef.current = index;
+    setTip({ text: entry.text, code: entry.code, counter: `${index + 1} / ${TIPS.length}` });
   };
 
-  const nextTip = () => showTip((currentTip + 1) % TIPS.length);
-  const prevTip = () => showTip((currentTip - 1 + TIPS.length) % TIPS.length);
+  const nextTip = () => showTip((currentTipRef.current + 1) % TIPS.length);
+  const prevTip = () => showTip((currentTipRef.current - 1 + TIPS.length) % TIPS.length);
 
   const copyMegaPrompt = () => {
     if (!megaPrompt) return;
     navigator.clipboard.writeText(megaPrompt);
-    showToast('✅ PROMPT COPIED!');
+    showToast('âœ… PROMPT COPIED!');
   };
 
   const showToast = (msg: string) => {
-    const t = document.getElementById('toast');
+    const t = toastRef.current;
     if (t) {
       t.textContent = msg;
       t.style.opacity = '1';
@@ -181,8 +192,71 @@ export default function HomePage() {
     }
   };
 
+  const copyName = (name: string) => {
+    navigator.clipboard.writeText('"' + name + '"');
+    showToast('ðŸ“‹ Copied: "' + name + '"');
+  };
+
+  const doItemSearch = (query: string, type: string) => {
+    query = query.trim().toLowerCase();
+    if (!query) { setSearch({ matches: null, count: '' }); return; }
+    const { blocks, items } = apiDataRef.current;
+    let pool: SearchEntry[] = [];
+    if (type === 'all' || type === 'blocks') pool = pool.concat(blocks.map(b => ({ name: b, kind: 'block' })));
+    if (type === 'all' || type === 'items') pool = pool.concat(items.map(i => ({ name: i, kind: 'item' })));
+    const seen = new Set<string>();
+    const matches = pool.filter(entry => { if (seen.has(entry.name)) return false; if (entry.name.toLowerCase().includes(query)) { seen.add(entry.name); return true; } return false; }).slice(0, 20);
+    if (matches.length === 0) { setSearch({ matches: [], count: '' }); return; }
+    const total = pool.filter(e => e.name.toLowerCase().includes(query)).length;
+    setSearch({
+      matches,
+      count: total > 20 ? 'Showing 20 of ' + total + ' matches â€” keep typing to narrow down' : total + ' match' + (total !== 1 ? 'es' : '') + ' found'
+    });
+  };
+
+  const refreshSpotlight = () => {
+    const funcs = Object.entries(apiDataRef.current.functions);
+    if (funcs.length === 0) return;
+    const [name, data] = funcs[Math.floor(Math.random() * funcs.length)];
+    setSpotlight({
+      name: 'api.' + name + '()',
+      desc: data.description || 'No description available.',
+      example: data.example || 'api.' + name + '(...);'
+    });
+  };
+
+  const initData = async () => {
+    try {
+      const files = await fetchDiscovery();
+      const results = await Promise.all(files.map(file =>
+        fetch(GITHUB_BASE + file).then(res => res.text())
+      ));
+      const functions: Record<string, ApiFunctionInfo> = {};
+      const blocks: string[] = [];
+      const items: string[] = [];
+      results.forEach((text, i) => {
+        if (files[i].endsWith('.md')) {
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed.functions) Object.assign(functions, parsed.functions);
+            if (parsed.blocks) blocks.push(...parsed.blocks);
+            if (parsed.items) items.push(...parsed.items);
+          } catch {}
+        } else if (files[i].endsWith('.txt')) {
+          const lines = text.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+          if (files[i].includes('BLOCK')) blocks.push(...lines);
+          if (files[i].includes('ITEM')) items.push(...lines);
+        }
+      });
+      apiDataRef.current = { functions, blocks, items };
+      refreshSpotlight();
+    } catch (e) {
+      console.warn('Failed to load API data', e);
+    }
+  };
+
   const initSystem = async () => {
-    const status = document.getElementById('sync-status');
+    const status = syncStatusRef.current;
     try {
       let promptBase = "Act as a Bloxd.io Developer Assistant.\n\n";
       const files = await fetchDiscovery();
@@ -194,7 +268,7 @@ export default function HomePage() {
         finalPrompt += `\n[FILE: ${res.file}]\n${res.text}\n`;
       });
       setMegaPrompt(finalPrompt);
-      if (status) status.innerText = "Synced ✅";
+      if (status) status.innerText = "Synced âœ…";
     } catch (e) {
       if (status) status.innerText = "Offline Mode";
       setMegaPrompt("Prompt unavailable.");
@@ -205,6 +279,7 @@ export default function HomePage() {
     loadStats();
     showTip(Math.floor(Math.random() * TIPS.length));
     initSystem();
+    initData();
     const interval = setInterval(nextTip, 8000);
     return () => clearInterval(interval);
   }, []);
@@ -217,7 +292,7 @@ export default function HomePage() {
             <img src="/logo.svg" alt="Players Logo" className="w-12 h-12 object-contain" />
             <h1 className="font-bold text-2xl tracking-tighter">Players</h1>
           </Link>
-          <button onClick={() => { const sb = document.querySelector('.sidebar'); const overlay = document.querySelector('.sidebar-overlay'); if (sb) sb.classList.toggle('mobile-open'); if (overlay) overlay.classList.toggle('active'); }} className="lg:hidden text-gray-500 hover:text-black focus:outline-none">
+          <button onClick={toggleSidebar} className="lg:hidden text-gray-500 hover:text-black focus:outline-none">
             <i className="fas fa-times text-xl"></i>
           </button>
         </div>
@@ -243,9 +318,9 @@ export default function HomePage() {
 
           <div className="mt-8 px-4 text-[12px] font-bold text-gray-400 uppercase tracking-widest mb-3">Live Stats</div>
           <div className="mx-2 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl p-4">
-            <div className="flex justify-between items-center mb-2"><span className="text-xs text-gray-500 font-semibold">API Functions</span><span id="sidebar-funcs" className="text-sm font-black text-blue-600 dark:text-blue-400">{stats.funcs || '—'}</span></div>
-            <div className="flex justify-between items-center mb-2"><span className="text-xs text-gray-500 font-semibold">Total Blocks</span><span id="sidebar-blocks" className="text-sm font-black text-green-600 dark:text-green-400">{stats.blocks || '—'}</span></div>
-            <div className="flex justify-between items-center"><span className="text-xs text-gray-500 font-semibold">Total Items</span><span id="sidebar-items" className="text-sm font-black text-orange-500 dark:text-orange-400">{stats.items || '—'}</span></div>
+            <div className="flex justify-between items-center mb-2"><span className="text-xs text-gray-500 font-semibold">API Functions</span><span id="sidebar-funcs" className="text-sm font-black text-blue-600 dark:text-blue-400">{stats.funcs || 'â€”'}</span></div>
+            <div className="flex justify-between items-center mb-2"><span className="text-xs text-gray-500 font-semibold">Total Blocks</span><span id="sidebar-blocks" className="text-sm font-black text-green-600 dark:text-green-400">{stats.blocks || 'â€”'}</span></div>
+            <div className="flex justify-between items-center"><span className="text-xs text-gray-500 font-semibold">Total Items</span><span id="sidebar-items" className="text-sm font-black text-orange-500 dark:text-orange-400">{stats.items || 'â€”'}</span></div>
           </div>
         </nav>
       </aside>
@@ -253,17 +328,17 @@ export default function HomePage() {
       <main className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-[#0d1117]">
         <header className="h-16 flex items-center px-4 md:px-10 justify-between border-b border-gray-200 dark:border-[#30363d] flex-shrink-0">
           <div className="flex items-center gap-3">
-            <button onClick={() => { const sb = document.querySelector('.sidebar'); const overlay = document.querySelector('.sidebar-overlay'); if (sb) sb.classList.toggle('mobile-open'); if (overlay) overlay.classList.toggle('active'); }} className="lg:hidden text-gray-600 dark:text-gray-400 hover:text-black dark:hover:text-white focus:outline-none text-xl mr-2"><i className="fas fa-bars"></i></button>
+            <button onClick={toggleSidebar} className="lg:hidden text-gray-600 dark:text-gray-400 hover:text-black dark:hover:text-white focus:outline-none text-xl mr-2"><i className="fas fa-bars"></i></button>
             <div className="text-sm font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Dashboard / Home</div>
           </div>
-          <div id="sync-status" className="text-[11px] bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 px-3 py-1 rounded border border-blue-100 dark:border-blue-900/30 font-black uppercase tracking-tighter">SYNCING...</div>
+          <div id="sync-status" ref={syncStatusRef} className="text-[11px] bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 px-3 py-1 rounded border border-blue-100 dark:border-blue-900/30 font-black uppercase tracking-tighter">SYNCING...</div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-6 md:p-10 custom-scroll">
 
           <div className="ai-banner">
             <div className="ai-banner-text">
-              <h2>🤖 Turn ChatGPT/Claude into a coding expert</h2>
+              <h2>ðŸ¤– Turn ChatGPT/Claude into a coding expert</h2>
               <p className="text-gray-500 dark:text-gray-400 mt-1">Copy the mega-prompt and paste it into ChatGPT, Claude, or other LLMs!</p>
             </div>
             <button onClick={copyMegaPrompt} id="copy-btn" className="btn-copy-ai shadow-sm"><i className="fas fa-copy mr-2"></i>Copy System Prompt</button>
@@ -272,7 +347,7 @@ export default function HomePage() {
           <div className="mb-8 flex justify-between items-center flex-wrap gap-4">
             <div>
               <h1 className="text-5xl font-black mb-3 tracking-tight">Bloxd.io <span className="text-blue-600 dark:text-blue-400">Utility.</span></h1>
-              <p className="text-gray-500 dark:text-gray-400 text-xl leading-relaxed font-medium">The ultimate developer hub for Bloxd.io — built by <Link href="https://github.com/FallenNightA" className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">FallenNightA</Link>. <Link href="https://github.com/HidayatBelajar319" className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">HidayatBelajar319</Link> is one of the official accounts made by FallenNightA (owner).</p>
+              <p className="text-gray-500 dark:text-gray-400 text-xl leading-relaxed font-medium">The ultimate developer hub for Bloxd.io â€” built by <Link href="https://github.com/FallenNightA" className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">FallenNightA</Link>. <Link href="https://github.com/HidayatBelajar319" className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">HidayatBelajar319</Link> is one of the official accounts made by FallenNightA (owner).</p>
             </div>
             <div className="flex flex-col items-end gap-1">
               <Link href="/api/export-workspace" style={{background:'#fee2e2', color:'#dc2626', border:'1px solid #fecaca', padding:'12px 20px', borderRadius:'12px', fontWeight:800, fontSize:'14px', textDecoration:'none', display:'flex', alignItems:'center', gap:'8px'}}><i className="fas fa-file-archive text-lg"></i> Export Full Source ZIP</Link>
@@ -288,9 +363,9 @@ export default function HomePage() {
 
           <div className="tip-card" id="tip-card">
             <div className="tip-badge"><i className="fas fa-lightbulb" style={{fontSize:'11px'}}></i> Bloxd.io Tip</div>
-            <p className="tip-text" id="tip-text">Loading tip...</p>
-            <div className="tip-code" id="tip-code" style={{display:'none'}}></div>
-            <div className="tip-nav"><button className="tip-btn" onClick={prevTip}>← Prev</button><button className="tip-btn" onClick={nextTip}>Next →</button><span className="tip-counter" id="tip-counter">1 / 10</span></div>
+            <p className="tip-text" id="tip-text">{tip.text}</p>
+            <div className="tip-code" id="tip-code" style={{display: tip.code ? 'block' : 'none'}}>{tip.code}</div>
+            <div className="tip-nav"><button className="tip-btn" onClick={prevTip}>â† Prev</button><button className="tip-btn" onClick={nextTip}>Next â†’</button><span className="tip-counter" id="tip-counter">{tip.counter}</span></div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
@@ -298,17 +373,27 @@ export default function HomePage() {
               <h3><i className="fas fa-search text-blue-500"></i> Item & Block Lookup</h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">Search any item or block name for use in your scripts.</p>
               <div className="search-bar">
-                <input type="text" id="item-search" className="search-input" placeholder="e.g. Diamond Sword, Dirt..." onInput={(e) => doItemSearch(e.target.value)} />
-                <select className="search-filter" id="search-type" onChange={() => doItemSearch((document.getElementById('item-search') as HTMLInputElement).value)}><option value="all">All</option><option value="blocks">Blocks</option><option value="items">Items</option></select>
+                <input type="text" id="item-search" ref={searchInputRef} className="search-input" placeholder="e.g. Diamond Sword, Dirt..." onInput={(e: ChangeEvent<HTMLInputElement>) => doItemSearch(e.currentTarget.value, searchType)} />
+                <select className="search-filter" id="search-type" value={searchType} onChange={(e: ChangeEvent<HTMLSelectElement>) => { const next = e.currentTarget.value as SearchType; setSearchType(next); doItemSearch(searchInputRef.current ? searchInputRef.current.value : '', next); }}><option value="all">All</option><option value="blocks">Blocks</option><option value="items">Items</option></select>
               </div>
-              <div className="search-results" id="search-results"><span className="search-empty"><i className="fas fa-keyboard mr-1"></i> Start typing to search...</span></div>
-              <div id="search-count" className="text-xs text-gray-400 mt-2"></div>
+              <div className="search-results" id="search-results">
+                {search.matches === null ? (
+                  <span className="search-empty"><i className="fas fa-keyboard mr-1"></i> Start typing to search...</span>
+                ) : search.matches.length === 0 ? (
+                  <span className="search-empty"><i className="fas fa-times mr-1"></i> No matches found.</span>
+                ) : (
+                  search.matches.map(m => (
+                    <span key={m.kind + ':' + m.name} className={'search-tag ' + (m.kind === 'item' ? 'item-tag' : '')} onClick={() => copyName(m.name)}>{m.name}</span>
+                  ))
+                )}
+              </div>
+              <div id="search-count" className="text-xs text-gray-400 mt-2">{search.count}</div>
             </div>
             <div className="spotlight-section">
-              <h3><span>✨ Function Spotlight</span><button className="spotlight-refresh" onClick={refreshSpotlight}><i className="fas fa-random mr-1"></i> Shuffle</button></h3>
-              <div className="func-name" id="spot-name">api.giveItem()</div>
-              <div className="func-desc" id="spot-desc">Loading...</div>
-              <div className="func-example" id="spot-example">loading...</div>
+              <h3><span>âœ¨ Function Spotlight</span><button className="spotlight-refresh" onClick={refreshSpotlight}><i className="fas fa-random mr-1"></i> Shuffle</button></h3>
+              <div className="func-name" id="spot-name">{spotlight.name}</div>
+              <div className="func-desc" id="spot-desc">{spotlight.desc}</div>
+              <div className="func-example" id="spot-example">{spotlight.example}</div>
             </div>
           </div>
 
@@ -337,96 +422,27 @@ export default function HomePage() {
               <div className="changelog-entry"><div className="changelog-dot orange"></div><div><div><span className="changelog-version">v1.5</span></div><div className="changelog-title">Documentation Redesign</div><div className="changelog-desc">Upgraded the docs layout for better readability, implemented bookmarking for specific API sections, and added a reading progress indicator.</div></div></div>
               <div className="changelog-entry"><div className="changelog-dot green"></div><div><div><span className="changelog-version">v1.4</span></div><div className="changelog-title">Utility Home Dashboard</div><div className="changelog-desc">Added live community stats, a rotating developer tip system, and an API function spotlight module to the homepage.</div></div></div>
               <div className="changelog-entry"><div className="changelog-dot"></div><div><div><span className="changelog-version">v1.0</span></div><div className="changelog-title">Initial Launch</div><div className="changelog-desc">First release: Custom mega-prompt template for Bloxd.io scripts and the original Monaco-powered Code Lab.</div></div></div>
-              <Link href="/changelog" className="inline-block mt-4 text-sm font-bold text-blue-600 dark:text-blue-400 hover:underline">View full changelog → /changelog</Link>
+              <Link href="/changelog" className="inline-block mt-4 text-sm font-bold text-blue-600 dark:text-blue-400 hover:underline">View full changelog â†’ /changelog</Link>
             </div>
           </div>
 
           <div className="feature-grid">
-            <Link href="/lab" className="feature-card"><i className="fas fa-flask text-blue-500 text-2xl mb-4"></i><h3 className="text-xl font-extrabold mb-2">Code Lab</h3><p className="text-gray-500 dark:text-gray-400 font-medium">Monaco-powered editor with Bloxd.io autocomplete. Supports all API functions, blocks, items, and callbacks out of the box.</p><div className="mt-4 text-blue-600 dark:text-blue-400 text-sm font-bold">Open Lab →</div></Link>
-            <Link href="/documentation" className="feature-card"><i className="fas fa-book-open text-green-600 text-2xl mb-4"></i><h3 className="text-xl font-extrabold mb-2">API Documentation</h3><p className="text-gray-500 dark:text-gray-400 font-medium">Browse all official documentation files synced live from the Bloxd.io GitHub. Full-text search with highlight.</p><div className="mt-4 text-green-600 dark:text-green-400 text-sm font-bold">Browse Docs →</div></Link>
-            <div className="feature-card" onClick={copyMegaPrompt}><i className="fas fa-scroll text-yellow-500 text-2xl mb-4"></i><h3 className="text-xl font-extrabold mb-2">Mega-Prompt Template</h3><p className="text-gray-500 dark:text-gray-400 font-medium">One-click copy of a 3000+ word system prompt that turns LLMs like ChatGPT/Claude into a Bloxd.io expert — no hallucinations.</p><div className="mt-4 text-yellow-600 dark:text-yellow-400 text-sm font-bold">Copy Prompt →</div></div>
-            <Link href="/bloxd-bench" className="feature-card"><i className="fas fa-cubes text-purple-500 text-2xl mb-4"></i><h3 className="text-xl font-extrabold mb-2">BloxdBench</h3><p className="text-gray-500 dark:text-gray-400 font-medium">Design and preview custom 3D models and voxel structures right in your browser. (Compatible with Windows 8.1 / older systems)</p><div className="mt-4 text-purple-600 dark:text-purple-400 text-sm font-bold">Open Builder →</div></Link>
+            <Link href="/lab" className="feature-card"><i className="fas fa-flask text-blue-500 text-2xl mb-4"></i><h3 className="text-xl font-extrabold mb-2">Code Lab</h3><p className="text-gray-500 dark:text-gray-400 font-medium">Monaco-powered editor with Bloxd.io autocomplete. Supports all API functions, blocks, items, and callbacks out of the box.</p><div className="mt-4 text-blue-600 dark:text-blue-400 text-sm font-bold">Open Lab â†’</div></Link>
+            <Link href="/documentation" className="feature-card"><i className="fas fa-book-open text-green-600 text-2xl mb-4"></i><h3 className="text-xl font-extrabold mb-2">API Documentation</h3><p className="text-gray-500 dark:text-gray-400 font-medium">Browse all official documentation files synced live from the Bloxd.io GitHub. Full-text search with highlight.</p><div className="mt-4 text-green-600 dark:text-green-400 text-sm font-bold">Browse Docs â†’</div></Link>
+            <div className="feature-card" onClick={copyMegaPrompt}><i className="fas fa-scroll text-yellow-500 text-2xl mb-4"></i><h3 className="text-xl font-extrabold mb-2">Mega-Prompt Template</h3><p className="text-gray-500 dark:text-gray-400 font-medium">One-click copy of a 3000+ word system prompt that turns LLMs like ChatGPT/Claude into a Bloxd.io expert â€” no hallucinations.</p><div className="mt-4 text-yellow-600 dark:text-yellow-400 text-sm font-bold">Copy Prompt â†’</div></div>
+            <Link href="/bloxd-bench" className="feature-card"><i className="fas fa-cubes text-purple-500 text-2xl mb-4"></i><h3 className="text-xl font-extrabold mb-2">BloxdBench</h3><p className="text-gray-500 dark:text-gray-400 font-medium">Design and preview custom 3D models and voxel structures right in your browser. (Compatible with Windows 8.1 / older systems)</p><div className="mt-4 text-purple-600 dark:text-purple-400 text-sm font-bold">Open Builder â†’</div></Link>
           </div>
 
           <div className="text-center py-8 text-sm text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-[#30363d] mt-4">
-            <p>Built by <a href="https://github.com/FallenNightA" className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">FallenNightA</a> · Inspired by <a href="https://github.com/delfineonx" className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">Delfineonx</a> · API data from <a href="https://github.com/Bloxdy/code-api" className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">Bloxdy/code-api</a> · Documentation at <Link href="/documentation" className="text-blue-500 hover:underline">/documentation</Link></p>
+            <p>Built by <a href="https://github.com/FallenNightA" className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">FallenNightA</a> Â· Inspired by <a href="https://github.com/delfineonx" className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">Delfineonx</a> Â· API data from <a href="https://github.com/Bloxdy/code-api" className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer">Bloxdy/code-api</a> Â· Documentation at <Link href="/documentation" className="text-blue-500 hover:underline">/documentation</Link></p>
             <p className="mt-2">Official account: <Link href="https://github.com/HidayatBelajar319" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">HidayatBelajar319</Link> is one of the official accounts made by <Link href="https://github.com/FallenNightA" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">FallenNightA</Link> (owner).</p>
           </div>
 
         </div>
 
-        <div className="sidebar-overlay" onClick={() => { const sb = document.querySelector('.sidebar'); const overlay = document.querySelector('.sidebar-overlay'); if (sb) sb.classList.toggle('mobile-open'); if (overlay) overlay.classList.toggle('active'); }}></div>
-        <div id="toast">✅ PROMPT COPIED!</div>
+        <div className="sidebar-overlay" onClick={toggleSidebar}></div>
+        <div id="toast" ref={toastRef}>âœ… PROMPT COPIED!</div>
 
-        <Script id="home-scripts" strategy="lazyOnload">
-          {`
-            const FALLBACK_FILES = ['README.md','API_REFERENCE.md','CLIENT_OPTIONS.md','CALLBACKS.md','ICONS.md','MESH_ENTITY_DOCS.md','SKINS_AND_POSES.md','MOB_SETTINGS.md','ENTITY_SETTINGS.md','PARTICLES.md','SOUNDS_AND_MUSIC.md','QTE_DOCS.md','BLOCK_NAMES.txt','ITEM_NAMES.txt'];
-            const GITHUB_BASE = "https://raw.githubusercontent.com/Bloxdy/code-api/main/";
-            let API_FUNCTIONS = {}, BLOCKS = [], ITEMS = [];
-            const CALLBACKS = ['tick','onClose','onPlayerJoin','onPlayerLeave','doPeriodicSave','onPlayerJump','onRespawnRequest','playerCommand','onPlayerChat','onPlayerChangeBlock','onPlayerDropItem','onPlayerPickedUpItem','onPlayerSelectInventorySlot','onBlockStand','onPlayerAttemptCraft','onPlayerCraft','onPlayerAttemptOpenChest','onPlayerOpenedChest','onWorldChangeBlock','onCreateBloxdMeshEntity','onEntityCollision','onPlayerAttemptSpawnMob','onWorldAttemptSpawnMob','onPlayerSpawnMob','onWorldSpawnMob','onWorldAttemptDespawnMob','onMobDespawned','onPlayerAttack','onPlayerDamagingOtherPlayer','onPlayerDamagingMob','onMobDamagingPlayer','onMobDamagingOtherMob','onAttemptKillPlayer','onPlayerKilledOtherPlayer','onMobKilledPlayer','onPlayerKilledMob','onMobKilledOtherMob','onPlayerPotionEffect','onPlayerDamagingMeshEntity','onPlayerBreakMeshEntity','onPlayerUsedThrowable','onPlayerThrowableHitTerrain','onTouchscreenActionButton','onTaskClaimed','onChunkLoaded','onPlayerRequestChunk','onItemDropCreated','onPlayerStartChargingItem','onPlayerFinishChargingItem'];
-
-            async function fetchDiscovery() {
-              try {
-                const res = await fetch('https://api.github.com/repos/Bloxdy/code-api/contents');
-                if (!res.ok) throw new Error('GitHub API failed');
-                const data = await res.json();
-                if (!Array.isArray(data)) throw new Error('Invalid response');
-                const files = data.filter(f => f.type === 'file' && (f.name.endsWith('.md') || f.name.endsWith('.txt'))).map(f => f.name);
-                if (files.length === 0) throw new Error('No files');
-                return files;
-              } catch (e) {
-                console.warn('Discovery failed, using fallback list', e);
-                return FALLBACK_FILES;
-              }
-            }
-
-            function doItemSearch(query) {
-              const type = document.getElementById('search-type').value;
-              const resultsEl = document.getElementById('search-results');
-              const countEl = document.getElementById('search-count');
-              query = query.trim().toLowerCase();
-              if (!query) { resultsEl.innerHTML = '<span class="search-empty"><i class="fas fa-keyboard mr-1"></i> Start typing to search...</span>'; countEl.textContent = ''; return; }
-              let pool = [];
-              if (type === 'all' || type === 'blocks') pool = pool.concat(BLOCKS.map(b => ({ name: b, kind: 'block' })));
-              if (type === 'all' || type === 'items') pool = pool.concat(ITEMS.map(i => ({ name: i, kind: 'item' })));
-              const seen = new Set();
-              const matches = pool.filter(entry => { if (seen.has(entry.name)) return false; if (entry.name.toLowerCase().includes(query)) { seen.add(entry.name); return true; } return false; }).slice(0, 20);
-              if (matches.length === 0) { resultsEl.innerHTML = '<span class="search-empty"><i class="fas fa-times mr-1"></i> No matches found.</span>'; countEl.textContent = ''; return; }
-              resultsEl.innerHTML = matches.map(m => '<span class="search-tag ' + (m.kind === 'item' ? 'item-tag' : '') + '" onclick="copyName(\\'' + m.name.replace(/'/g, "\\'") + '\\')">' + m.name + '</span>').join('');
-              const total = pool.filter(e => e.name.toLowerCase().includes(query)).length;
-              countEl.textContent = total > 20 ? 'Showing 20 of ' + total + ' matches — keep typing to narrow down' : total + ' match' + (total !== 1 ? 'es' : '') + ' found';
-            }
-
-            function copyName(name) { navigator.clipboard.writeText('"' + name + '"'); showToast('📋 Copied: "' + name + '"'); }
-
-            function refreshSpotlight() { const funcs = Object.entries(API_FUNCTIONS); if (funcs.length === 0) return; const [name, data] = funcs[Math.floor(Math.random() * funcs.length)]; document.getElementById('spot-name').textContent = 'api.' + name + '()'; document.getElementById('spot-desc').textContent = data.description || 'No description available.'; document.getElementById('spot-example').textContent = data.example || 'api.' + name + '(...);'; }
-
-            function showToast(msg) { const t = document.getElementById('toast'); if (t) { t.textContent = msg; t.style.opacity = '1'; setTimeout(() => t.style.opacity = '0', 2500); } }
-
-            async function initData() {
-              try {
-                const FILES = await fetchDiscovery();
-                const results = await Promise.all(FILES.map(file => fetch(GITHUB_BASE + file).then(res => res.text())));
-                results.forEach((text, i) => {
-                  if (FILES[i].endsWith('.md')) {
-                    try {
-                      const parsed = JSON.parse(text);
-                      if (parsed.functions) Object.assign(API_FUNCTIONS, parsed.functions);
-                      if (parsed.blocks) BLOCKS.push(...parsed.blocks);
-                      if (parsed.items) ITEMS.push(...parsed.items);
-                    } catch {}
-                  } else if (FILES[i].endsWith('.txt')) {
-                    const items = text.split('\\n').filter(l => l.trim() && !l.startsWith('#'));
-                    if (FILES[i].includes('BLOCK')) BLOCKS.push(...items);
-                    if (FILES[i].includes('ITEM')) ITEMS.push(...items);
-                  }
-                });
-                refreshSpotlight();
-              } catch (e) { console.warn('Failed to load API data', e); }
-            }
-            initData();
-          `}
-        </Script>
       </main>
     </div>
   );
